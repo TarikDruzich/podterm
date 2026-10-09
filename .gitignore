@@ -1,0 +1,8 @@
+/target/
+.DS_Store
+*.bak
+*.backup
+*.orig
+*.swp
+*.swo
+.env
