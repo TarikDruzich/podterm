@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "podterm-rs"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "crossterm",
  "quick-xml",
@@ -181,6 +181,7 @@ dependencies = [
  "serde_json",
  "unicode-width",
  "urlencoding",
+ "windows-sys",
 ]
 
 [[package]]

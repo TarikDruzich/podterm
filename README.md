@@ -1,6 +1,6 @@
 # podterm
 
-**A lightweight, keyboard-first podcast player for the Linux terminal.**
+**A lightweight, keyboard-first podcast player for Linux and Windows terminals.**
 
 podterm is written in Rust and uses `mpv` for audio playback. Search the public Apple Podcasts catalog, subscribe to podcasts, browse RSS/Atom episodes, and pick up listening where you left off — without opening a browser.
 
@@ -21,9 +21,9 @@ podterm is written in Rust and uses `mpv` for audio playback. Search the public 
 
 ## Requirements
 
-- Linux terminal (tested on Omarchy / Arch Linux)
+- Linux terminal (tested on Omarchy / Arch Linux) or Windows 11 with Windows Terminal (**Windows preview; real-device testing pending**)
 - Rust and Cargo **to build from source**
-- `mpv` and `curl` installed and available in `$PATH`
+- `mpv` and `curl` installed and available in `PATH`
 
 On Omarchy / Arch Linux:
 
@@ -32,6 +32,8 @@ sudo pacman -S --needed mpv curl
 ```
 
 Rust can be installed through your distro or [rustup](https://rustup.rs/).
+
+**Windows 11:** See [WINDOWS.md](WINDOWS.md) for the Windows build artifact, `mpv` setup, and launch instructions. On Windows, `curl.exe` is included with current Windows 11 systems, and `mpv` must be installed separately. In a Windows terminal you can run `podterm-rs.exe --doctor` to check requirements.
 
 ## Install from source
 
@@ -93,7 +95,7 @@ Podcast episode metadata is cached under:
 ~/.cache/podterm-rs/episodes/
 ```
 
-The Rust version shares the existing `library.json` and `progress.json` used by the earlier Python version. If you use a private podcast RSS URL, **do not publish your personal data folder or feed URL**, because it may include access tokens. Keep backup copies of your personal data when upgrading.
+On Windows, data is stored at `%LOCALAPPDATA%\podterm\`, and episode cache is under `%LOCALAPPDATA%\podterm\cache\episodes\`. The Linux Rust version shares the existing `library.json` and `progress.json` used by the earlier Python version. If you use a private podcast RSS URL, **do not publish your personal data folder or feed URL**, because it may include access tokens. Keep backup copies of your personal data when upgrading.
 
 ## Audio configuration
 
@@ -113,6 +115,8 @@ cargo build --release
 bash scripts/measure.sh rust 8  # while podterm-rs is running in another terminal
 ```
 
+On either platform, `podterm-rs --version` prints the version and `podterm-rs --doctor` checks for `mpv` and `curl` without opening the player.
+
 The measurements script reports process RSS (not unique physical memory) and sampled CPU usage. `mpv` is a separate process and usually accounts for most memory use during playback.
 
 ## Troubleshooting
@@ -120,6 +124,7 @@ The measurements script reports process RSS (not unique physical memory) and sam
 - **No sound:** confirm `mpv` works on your system and check your audio output device.
 - **Search finds no older episode:** open the show, press `r`, then try `/` again. The publisher may have removed the episode from the RSS feed.
 - **Stuttering:** ensure `PODTERM_MPV_LOW_MEMORY` is not set to `1`.
+- **Windows missing `mpv`:** see [WINDOWS.md](WINDOWS.md), install `shinchiro.mpv`, or set `PODTERM_MPV` to the full `mpv.exe` path.
 - **`podterm-rs: command not found`:** run `~/.local/bin/podterm-rs` or add that directory to your `PATH`.
 
 Issues and contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

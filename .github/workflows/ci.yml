@@ -7,13 +7,35 @@ on:
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Check out source
+      - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Show Rust version
+      - name: Rust toolchain
         run: rustc --version && cargo --version
-      - name: Run tests
+      - name: Run unit tests
         run: cargo test --all-targets
-      - name: Build release binary
+      - name: Release build
         run: cargo build --release
+      - name: Package Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+      - name: Upload Windows ZIP
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: podterm-windows-x86_64
+          path: podterm-rs-v0.4.3-windows-x86_64.zip
+          if-no-files-found: error
+      - name: Upload Linux executable
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: podterm-linux-x86_64
+          path: target/release/podterm-rs
+          if-no-files-found: error

@@ -6,3 +6,7 @@
 *.swp
 *.swo
 .env
+
+# Packaged release artifacts
+/podterm-rs-v*-linux-*.tar.gz
+/podterm-rs-v*-windows-*.zip

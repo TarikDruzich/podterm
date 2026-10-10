@@ -1,3 +1,5 @@
+> For experimental Windows builds, use [PUBLISH_WINDOWS.md](PUBLISH_WINDOWS.md). Do not create a release tag before testing the Windows .exe.
+
 # Publishing to GitHub (maintainer checklist)
 
 A project maintainer should review code and data before publishing. This package contains application source, documentation, tests, CI, and an MIT license; it does not contain local user data.
