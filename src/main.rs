@@ -1,24 +1,15 @@
-//! podterm-rs 0.4.3 — Rust CLIAMP-style podcast player, with downloads and recent history.
-//! Data: ~/.local/share/podterm on Linux, %LOCALAPPDATA%\podterm on Windows
+//! podterm-rs 0.4.4 — Rust CLIAMP-style podcast player, with downloads and recent history.
+//! Data compatibility: ~/.local/share/podterm/{library,progress}.json
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    io::{self, BufRead, BufReader, Read, Stdout, Write},
+    io::{self, BufRead, BufReader, Stdout, Write},
+    os::unix::{fs::{OpenOptionsExt, PermissionsExt}, net::UnixStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{atomic::{AtomicU64, Ordering}, mpsc::{self, Receiver, Sender}},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
-#[cfg(unix)]
-use std::os::unix::{fs::{OpenOptionsExt, PermissionsExt}, net::UnixStream};
-#[cfg(windows)]
-use std::os::windows::{ffi::OsStrExt, fs::OpenOptionsExt, io::AsRawHandle};
-#[cfg(windows)]
-use windows_sys::Win32::{
-    Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH},
-    System::Pipes::PeekNamedPipe,
 };
 
 use crossterm::{
@@ -33,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use unicode_width::UnicodeWidthChar;
 
-const APP_VERSION: &str = "0.4.3";
+const APP_VERSION: &str = "0.4.4";
 const DOWNLOAD_MAX_SIZE: u64 = 536_870_912; // 512 MiB per episode
 const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(600);
 const CACHE_TTL: Duration = Duration::from_secs(600);
@@ -110,20 +101,8 @@ enum TaskResult {
 struct TaskReply { seq: u64, outcome: Result<TaskResult, String> }
 
 fn home_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        // Windows: isolated application data, not a working-directory file.
-        let base = env::var_os("LOCALAPPDATA")
-            .or_else(|| env::var_os("APPDATA"))
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir);
-        base.join("podterm")
-    }
-    #[cfg(not(windows))]
-    {
-        PathBuf::from(env::var_os("HOME").unwrap_or_default())
-            .join(".local/share/podterm")
-    }
+    PathBuf::from(env::var_os("HOME").unwrap_or_default())
+        .join(".local/share/podterm")
 }
 fn library_path() -> PathBuf { home_dir().join("library.json") }
 fn history_path() -> PathBuf { home_dir().join("progress.json") }
@@ -158,7 +137,6 @@ fn download_to_disk(episode: Episode, podcast: Podcast) -> Result<DownloadedEpis
     if !valid_url(&episode.url) { return Err("Invalid episode URL".into()); }
     let dir = downloads_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Cannot create download folder: {e}"))?;
-    #[cfg(unix)]
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
         .map_err(|e| format!("Cannot secure download folder: {e}"))?;
     let filename = download_filename(&episode.url);
@@ -171,8 +149,8 @@ fn download_to_disk(episode: Episode, podcast: Podcast) -> Result<DownloadedEpis
     }
     let tmp = dir.join(format!(".{filename}.{}.part", std::process::id()));
     let _ = fs::remove_file(&tmp);
-    let file = private_file_options().open(&tmp)
-        .map_err(|e| format!("Cannot create temporary download: {e}"))?;
+    let file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&tmp).map_err(|e| format!("Cannot create temporary download: {e}"))?;
     drop(file);
     let status = Command::new("curl")
         .args(["-fLsS", "--connect-timeout", "10", "--max-time", "3600",
@@ -208,18 +186,10 @@ fn download_to_disk(episode: Episode, podcast: Podcast) -> Result<DownloadedEpis
 // credentials, so JSON cache files are created with owner-only permissions.
 // Existing subscriptions/progress remain in their original files.
 fn cache_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        // The cache is kept alongside per-user app data on Windows.
-        home_dir().join("cache/episodes")
-    }
-    #[cfg(not(windows))]
-    {
-        let base = env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".cache"));
-        base.join("podterm-rs/episodes")
-    }
+    let base = env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".cache"));
+    base.join("podterm-rs/episodes")
 }
 
 // Stable FNV-1a hash: std::hash's default hashing algorithm is not guaranteed to
@@ -287,44 +257,20 @@ fn fetch_and_cache_episodes(feed: String) -> Result<TaskResult, String> {
 fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
     fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
 }
-fn private_file_options() -> fs::OpenOptions {
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    opts.mode(0o600);
-    opts
-}
-
-#[cfg(unix)]
-fn replace_file(src: &Path, dst: &Path) -> io::Result<()> { fs::rename(src, dst) }
-
-#[cfg(windows)]
-fn replace_file(src: &Path, dst: &Path) -> io::Result<()> {
-    // Unlike POSIX rename, Windows std::fs::rename does not replace an existing
-    // destination. Keep JSON updates atomic using Win32 MoveFileExW instead.
-    fn wide(path: &Path) -> Vec<u16> {
-        path.as_os_str().encode_wide().chain(Some(0)).collect()
-    }
-    let source = wide(src);
-    let target = wide(dst);
-    let ok = unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(),
-        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) };
-    if ok == 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
-}
-
 fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<(), String> {
     let dir = path.parent().ok_or("Missing data directory")?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let id = WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("tmp-{}-{id}", std::process::id()));
     let content = serde_json::to_vec_pretty(data).map_err(|e| e.to_string())?;
-    let mut file = private_file_options().open(&tmp).map_err(|e| e.to_string())?;
+    let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(&tmp).map_err(|e| e.to_string())?;
     if let Err(err) = file.write_all(&content) {
         let _ = fs::remove_file(&tmp);
         return Err(err.to_string());
     }
     drop(file);
-    match replace_file(&tmp, path) {
+    match fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(err) => { let _ = fs::remove_file(&tmp); Err(err.to_string()) }
     }
@@ -343,7 +289,7 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
     if !valid_url(url) { return Err("Expected an http(s) URL".into()); }
     let output = Command::new("curl")
         .args(["-fsSL", "--compressed", "--connect-timeout", "7", "--max-time", "20",
-               "--max-filesize", "8388608", "--user-agent", "podterm-rs/0.4.3", "--", url])
+               "--max-filesize", "8388608", "--user-agent", "podterm-rs/0.4.2", "--", url])
         .output().map_err(|e| format!("curl is required: {e}"))?;
     if !output.status.success() {
         return Err(format!("Could not load URL (curl exit {}).", output.status));
@@ -511,68 +457,6 @@ fn low_memory_enabled() -> bool {
     low_memory_setting(env::var("PODTERM_MPV_LOW_MEMORY").ok().as_deref())
 }
 
-fn ipc_endpoint() -> PathBuf {
-    #[cfg(windows)]
-    {
-        // A per-process, per-session endpoint avoids collisions between players.
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
-            .unwrap_or_default().as_nanos();
-        PathBuf::from(format!(r"\\.\pipe\podterm-{}-{stamp}", std::process::id()))
-    }
-    #[cfg(unix)]
-    {
-        home_dir().join(format!("mpv-rs-{}.sock", std::process::id()))
-    }
-}
-
-fn mpv_executable() -> std::ffi::OsString {
-    env::var_os("PODTERM_MPV").filter(|value| !value.is_empty())
-        .unwrap_or_else(|| std::ffi::OsString::from("mpv"))
-}
-
-#[cfg(windows)]
-fn windows_ipc_command(path: &Path, args: Value) -> Option<Value> {
-    // mpv's JSON IPC uses a Windows named pipe. Poll available bytes before
-    // reading: a blocking read_line() can otherwise freeze the entire TUI.
-    let mut pipe = fs::OpenOptions::new()
-        .read(true).write(true)
-        .security_qos_flags(0x00010000) // SECURITY_IDENTIFICATION
-        .open(path).ok()?;
-    writeln!(pipe, "{}", json!({"command":args,"request_id":42})).ok()?;
-    pipe.flush().ok()?;
-    let deadline = Instant::now() + Duration::from_millis(350);
-    let mut bytes = Vec::<u8>::new();
-    loop {
-        if Instant::now() >= deadline || bytes.len() >= 65_536 { return None; }
-        let mut available = 0u32;
-        let ok = unsafe {
-            PeekNamedPipe(pipe.as_raw_handle(), std::ptr::null_mut(), 0,
-                std::ptr::null_mut(), &mut available, std::ptr::null_mut())
-        };
-        if ok == 0 { return None; }
-        if available == 0 {
-            thread::sleep(Duration::from_millis(5));
-            continue;
-        }
-        let mut buffer = [0u8; 8192];
-        let count = (available as usize).min(buffer.len());
-        let n = pipe.read(&mut buffer[..count]).ok()?;
-        if n == 0 { return None; }
-        bytes.extend_from_slice(&buffer[..n]);
-        while let Some(end) = bytes.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = bytes.drain(..=end).collect();
-            let response: Value = match serde_json::from_slice(&line) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            if response["request_id"] == 42 && response["error"] == "success" {
-                return Some(response["data"].clone());
-            }
-            if response["request_id"] == 42 { return None; }
-        }
-    }
-}
-
 struct Player {
     child: Option<Child>,
     socket: Option<PathBuf>,
@@ -600,29 +484,23 @@ impl Player {
     fn command(&mut self, args: Value) -> Option<Value> {
         if !self.alive() { return None; }
         let path = self.socket.as_ref()?;
-        #[cfg(windows)]
-        return windows_ipc_command(path, args);
-        #[cfg(unix)]
         let mut conn = UnixStream::connect(path).ok()?;
-        #[cfg(unix)]
-        {
-            conn.set_read_timeout(Some(Duration::from_millis(160))).ok()?;
-            conn.set_write_timeout(Some(Duration::from_millis(160))).ok()?;
-            writeln!(conn, "{}", json!({"command":args,"request_id":42})).ok()?;
-            let mut reader = BufReader::new(conn);
-            let mut line = String::new();
-            // MPV can emit asynchronous events before the command response.
-            for _ in 0..24 {
-                line.clear();
-                if reader.read_line(&mut line).ok()? == 0 { return None; }
-                let response: Value = match serde_json::from_str(&line) { Ok(v) => v, Err(_) => continue };
-                if response["request_id"] == 42 && response["error"] == "success" {
-                    return Some(response["data"].clone());
-                }
-                if response["request_id"] == 42 { return None; }
+        conn.set_read_timeout(Some(Duration::from_millis(160))).ok()?;
+        conn.set_write_timeout(Some(Duration::from_millis(160))).ok()?;
+        writeln!(conn, "{}", json!({"command":args,"request_id":42})).ok()?;
+        let mut reader = BufReader::new(conn);
+        let mut line = String::new();
+        // MPV can emit asynchronous events before the command response.
+        for _ in 0..24 {
+            line.clear();
+            if reader.read_line(&mut line).ok()? == 0 { return None; }
+            let response: Value = match serde_json::from_str(&line) { Ok(v) => v, Err(_) => continue };
+            if response["request_id"] == 42 && response["error"] == "success" {
+                return Some(response["data"].clone());
             }
-            None
+            if response["request_id"] == 42 { return None; }
         }
+        None
     }
     fn start(&mut self, podcast: &Podcast, episode: &Episode,
              downloaded_file: Option<&Path>) -> Result<(), String> {
@@ -636,11 +514,10 @@ impl Player {
         self.position_confirmed = false;
         self.started_at = Instant::now();
         self.last_save = Instant::now();
-        let path = ipc_endpoint();
+        let path = home_dir().join(format!("mpv-rs-{}.sock", std::process::id()));
         fs::create_dir_all(home_dir()).map_err(|e| e.to_string())?;
-        #[cfg(unix)]
         let _ = fs::remove_file(&path);
-        let mut command = Command::new(mpv_executable());
+        let mut command = Command::new("mpv");
         command.args(["--no-video", "--no-terminal", "--really-quiet"]);
         if low_memory_enabled() { command.args(low_memory_mpv_args()); }
         command.arg(format!("--input-ipc-server={}", path.display()));
@@ -737,12 +614,7 @@ impl Player {
                 let _ = child.wait();
             }
         }
-        if let Some(path) = self.socket.take() {
-            #[cfg(unix)]
-            let _ = fs::remove_file(path);
-            #[cfg(windows)]
-            let _ = path; // Named pipes aren't filesystem entries.
-        }
+        if let Some(path) = self.socket.take() { let _ = fs::remove_file(path); }
         self.episode = None;
         self.pending_resume = None;
     }
@@ -1371,28 +1243,6 @@ fn run(app: &mut App) -> io::Result<()> {
     Ok(())
 }
 fn main() {
-    if let Some(arg) = env::args_os().nth(1) {
-        if arg.to_string_lossy() == "--version" {
-            println!("podterm-rs {APP_VERSION}");
-            return;
-        }
-        if arg.to_string_lossy() == "--doctor" {
-            let mut success = true;
-            for (name, exe) in [("mpv", mpv_executable()),
-                ("curl", std::ffi::OsString::from("curl"))] {
-                let ok = Command::new(exe).arg("--version")
-                    .stdout(Stdio::null()).stderr(Stdio::null())
-                    .status().map(|status| status.success()).unwrap_or(false);
-                println!("{name}: {}", if ok { "OK" } else { "MISSING (not in PATH)" });
-                success &= ok;
-            }
-            println!("Data folder: {}", home_dir().display());
-            if !success { std::process::exit(1); }
-            return;
-        }
-        eprintln!("Unknown option. Use --version or --doctor, or run without arguments.");
-        std::process::exit(2);
-    }
     let mut app = App::new();
     if let Err(err) = run(&mut app) {
         app.player.stop();
@@ -1519,26 +1369,6 @@ mod tests {
         assert_eq!(restored.title, "Episode");
         assert_eq!(restored.downloaded_at, 123);
         assert_eq!(media_extension("https://example.invalid/audio?x=1"), "audio");
-    }
-    #[test]
-    fn can_replace_json_on_same_path() {
-        // Windows rename() cannot overwrite, so verify persistence across updates.
-        let suffix = SystemTime::now().duration_since(UNIX_EPOCH)
-            .unwrap_or_default().as_nanos();
-        let dir = env::temp_dir().join(format!("podterm-test-{}-{suffix}", std::process::id()));
-        let file = dir.join("progress.json");
-        write_json(&file, &json!({"position": 12.0})).unwrap();
-        write_json(&file, &json!({"position": 34.0})).unwrap();
-        let current: Value = read_json(&file);
-        assert_eq!(current["position"], 34.0);
-        fs::remove_file(file).unwrap();
-        fs::remove_dir(dir).unwrap();
-    }
-    #[cfg(windows)]
-    #[test]
-    fn windows_named_pipe_location_is_correct() {
-        assert!(ipc_endpoint().to_str().unwrap().starts_with(r"\\.\pipe\podterm-"));
-        assert!(home_dir().ends_with("podterm"));
     }
     #[test]
     fn formatting_and_feed_keys() {

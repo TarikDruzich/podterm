@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Podterm
+GenericName=Podcast Player
+Comment=Lightweight terminal podcast player written in Rust
+Exec=xdg-terminal-exec --title=Podterm podterm-rs
+Icon=podterm
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupNotify=false

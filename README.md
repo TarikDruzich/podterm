@@ -1,6 +1,9 @@
 # podterm
 
-**A lightweight, keyboard-first podcast player for Linux and Windows terminals.**
+<img src="assets/podterm.png" alt="Podterm icon: green headphones and terminal prompt" width="128">
+
+
+**A lightweight, keyboard-first podcast player for the Linux terminal, with Omarchy desktop integration.**
 
 podterm is written in Rust and uses `mpv` for audio playback. Search the public Apple Podcasts catalog, subscribe to podcasts, browse RSS/Atom episodes, and pick up listening where you left off — without opening a browser.
 
@@ -21,9 +24,9 @@ podterm is written in Rust and uses `mpv` for audio playback. Search the public 
 
 ## Requirements
 
-- Linux terminal (tested on Omarchy / Arch Linux) or Windows 11 with Windows Terminal (**Windows preview; real-device testing pending**)
+- Linux terminal (developed/tested on Omarchy / Arch Linux)
 - Rust and Cargo **to build from source**
-- `mpv` and `curl` installed and available in `PATH`
+- `mpv` and `curl` installed and available in `$PATH`
 
 On Omarchy / Arch Linux:
 
@@ -33,8 +36,6 @@ sudo pacman -S --needed mpv curl
 
 Rust can be installed through your distro or [rustup](https://rustup.rs/).
 
-**Windows 11:** See [WINDOWS.md](WINDOWS.md) for the Windows build artifact, `mpv` setup, and launch instructions. On Windows, `curl.exe` is included with current Windows 11 systems, and `mpv` must be installed separately. In a Windows terminal you can run `podterm-rs.exe --doctor` to check requirements.
-
 ## Install from source
 
 ```sh
@@ -43,7 +44,7 @@ cd podterm
 bash scripts/install.sh
 ```
 
-The installation script runs the test suite, builds an optimized release binary, and installs `podterm-rs` to `~/.local/bin/`. It does **not** delete or modify your Python podterm installation.
+The installation script runs the test suite, builds an optimized release binary, installs `podterm-rs` to `~/.local/bin/`, and installs the Podterm icon and desktop launcher when `xdg-terminal-exec` is available. It does **not** delete or modify your Python podterm installation.
 
 Run:
 
@@ -52,6 +53,18 @@ podterm-rs
 ```
 
 If `~/.local/bin` is not on your `$PATH`, use `~/.local/bin/podterm-rs` instead.
+
+### Omarchy app launcher
+
+After installation, search for **Podterm** in the Omarchy app launcher. The launcher opens Podterm in your terminal, with the green Podterm icon.
+
+To install or refresh just the icon and launcher (without rebuilding Rust):
+
+```sh
+bash scripts/install-desktop.sh
+```
+
+The icon is stored in `assets/podterm.png`, and the source desktop entry is in `packaging/podterm.desktop`. The installer writes them to `~/.local/share/icons/hicolor/512x512/apps/` and `~/.local/share/applications/`.
 
 Alternatively, run directly from source:
 
@@ -95,7 +108,7 @@ Podcast episode metadata is cached under:
 ~/.cache/podterm-rs/episodes/
 ```
 
-On Windows, data is stored at `%LOCALAPPDATA%\podterm\`, and episode cache is under `%LOCALAPPDATA%\podterm\cache\episodes\`. The Linux Rust version shares the existing `library.json` and `progress.json` used by the earlier Python version. If you use a private podcast RSS URL, **do not publish your personal data folder or feed URL**, because it may include access tokens. Keep backup copies of your personal data when upgrading.
+The Rust version shares the existing `library.json` and `progress.json` used by the earlier Python version. If you use a private podcast RSS URL, **do not publish your personal data folder or feed URL**, because it may include access tokens. Keep backup copies of your personal data when upgrading.
 
 ## Audio configuration
 
@@ -115,8 +128,6 @@ cargo build --release
 bash scripts/measure.sh rust 8  # while podterm-rs is running in another terminal
 ```
 
-On either platform, `podterm-rs --version` prints the version and `podterm-rs --doctor` checks for `mpv` and `curl` without opening the player.
-
 The measurements script reports process RSS (not unique physical memory) and sampled CPU usage. `mpv` is a separate process and usually accounts for most memory use during playback.
 
 ## Troubleshooting
@@ -124,7 +135,6 @@ The measurements script reports process RSS (not unique physical memory) and sam
 - **No sound:** confirm `mpv` works on your system and check your audio output device.
 - **Search finds no older episode:** open the show, press `r`, then try `/` again. The publisher may have removed the episode from the RSS feed.
 - **Stuttering:** ensure `PODTERM_MPV_LOW_MEMORY` is not set to `1`.
-- **Windows missing `mpv`:** see [WINDOWS.md](WINDOWS.md), install `shinchiro.mpv`, or set `PODTERM_MPV` to the full `mpv.exe` path.
 - **`podterm-rs: command not found`:** run `~/.local/bin/podterm-rs` or add that directory to your `PATH`.
 
 Issues and contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

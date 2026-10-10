@@ -18,3 +18,10 @@ if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
 else
   echo 'Run it with: podterm-rs'
 fi
+
+# Omarchy desktop integration (also available separately).
+if command -v xdg-terminal-exec >/dev/null 2>&1; then
+  bash "$project_dir/scripts/install-desktop.sh"
+else
+  echo "Desktop launcher skipped: xdg-terminal-exec is not available."
+fi
