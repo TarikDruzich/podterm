@@ -1537,7 +1537,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_named_pipe_location_is_correct() {
-        assert!(ipc_endpoint().to_str().unwrap().starts_with(r"\.\pipe\podterm-"));
+        assert!(ipc_endpoint().to_str().unwrap().starts_with(r"\\.\pipe\podterm-"));
         assert!(home_dir().ends_with("podterm"));
     }
     #[test]
